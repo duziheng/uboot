@@ -123,7 +123,7 @@ static int clk_get_by_indexed_prop(struct udevice *dev, const char *prop_name,
 
 
 	return clk_get_by_index_tail(ret, dev_ofnode(dev), &args, "clocks",
-				     index > 0, clk);
+				     index, clk);
 }
 
 int clk_get_by_index(struct udevice *dev, int index, struct clk *clk)
@@ -135,7 +135,7 @@ int clk_get_by_index(struct udevice *dev, int index, struct clk *clk)
 					 index, &args);
 
 	return clk_get_by_index_tail(ret, dev_ofnode(dev), &args, "clocks",
-				     index > 0, clk);
+				     index, clk);
 }
 
 int clk_get_by_index_nodev(ofnode node, int index, struct clk *clk)
@@ -144,10 +144,10 @@ int clk_get_by_index_nodev(ofnode node, int index, struct clk *clk)
 	int ret;
 
 	ret = ofnode_parse_phandle_with_args(node, "clocks", "#clock-cells", 0,
-					     index > 0, &args);
+					     index, &args);
 
 	return clk_get_by_index_tail(ret, node, &args, "clocks",
-				     index > 0, clk);
+				     index, clk);
 }
 
 int clk_get_bulk(struct udevice *dev, struct clk_bulk *bulk)
@@ -412,6 +412,7 @@ int clk_request(struct udevice *dev, struct clk *clk)
 	ops = clk_dev_ops(dev);
 
 	clk->dev = dev;
+	clk->enable_count = 0;
 
 	if (!ops->request)
 		return 0;
@@ -523,7 +524,6 @@ int clk_set_parent(struct clk *clk, struct clk *parent)
 int clk_enable(struct clk *clk)
 {
 	const struct clk_ops *ops;
-	struct clk *clkp = NULL;
 	int ret;
 
 	debug("%s(clk=%p)\n", __func__, clk);
@@ -532,32 +532,29 @@ int clk_enable(struct clk *clk)
 	ops = clk_dev_ops(clk->dev);
 
 	if (CONFIG_IS_ENABLED(CLK_CCF)) {
-		/* Take id 0 as a non-valid clk, such as dummy */
-		if (clk->id && !clk_get_by_id(clk->id, &clkp)) {
-			if (clkp->enable_count) {
-				clkp->enable_count++;
-				return 0;
-			}
-			if (clkp->dev->parent &&
-			    device_get_uclass_id(clkp->dev) == UCLASS_CLK) {
-				ret = clk_enable(dev_get_clk_ptr(clkp->dev->parent));
-				if (ret) {
-					printf("Enable %s failed\n",
-					       clkp->dev->parent->name);
-					return ret;
-				}
+		if (clk->enable_count) {
+			clk->enable_count++;
+			return 0;
+		}
+		if (clk->dev->parent &&
+		    device_get_uclass_id(clk->dev->parent) == UCLASS_CLK) {
+			ret = clk_enable(dev_get_clk_ptr(clk->dev->parent));
+			if (ret) {
+				printf("Enable %s failed\n",
+				       clk->dev->parent->name);
+				return ret;
 			}
 		}
 
 		if (ops->enable) {
 			ret = ops->enable(clk);
 			if (ret) {
-				printf("Enable %s failed\n", clk->dev->name);
+				printf("Enable %s failed (error %d)\n",
+				       clk->dev->name, ret);
 				return ret;
 			}
 		}
-		if (clkp)
-			clkp->enable_count++;
+		clk->enable_count++;
 	} else {
 		if (!ops->enable)
 			return -ENOSYS;
@@ -583,7 +580,6 @@ int clk_enable_bulk(struct clk_bulk *bulk)
 int clk_disable(struct clk *clk)
 {
 	const struct clk_ops *ops;
-	struct clk *clkp = NULL;
 	int ret;
 
 	debug("%s(clk=%p)\n", __func__, clk);
@@ -592,16 +588,14 @@ int clk_disable(struct clk *clk)
 	ops = clk_dev_ops(clk->dev);
 
 	if (CONFIG_IS_ENABLED(CLK_CCF)) {
-		if (clk->id && !clk_get_by_id(clk->id, &clkp)) {
-			if (clkp->enable_count == 0) {
-				printf("clk %s already disabled\n",
-				       clkp->dev->name);
-				return 0;
-			}
-
-			if (--clkp->enable_count > 0)
-				return 0;
+		if (clk->enable_count == 0) {
+			printf("clk %s already disabled\n",
+			       clk->dev->name);
+			return 0;
 		}
+
+		if (--clk->enable_count > 0)
+			return 0;
 
 		if (ops->disable) {
 			ret = ops->disable(clk);
@@ -609,12 +603,12 @@ int clk_disable(struct clk *clk)
 				return ret;
 		}
 
-		if (clkp && clkp->dev->parent &&
-		    device_get_uclass_id(clkp->dev) == UCLASS_CLK) {
-			ret = clk_disable(dev_get_clk_ptr(clkp->dev->parent));
+		if (clk->dev->parent &&
+		    device_get_uclass_id(clk->dev->parent) == UCLASS_CLK) {
+			ret = clk_disable(dev_get_clk_ptr(clk->dev->parent));
 			if (ret) {
-				printf("Disable %s failed\n",
-				       clkp->dev->parent->name);
+				printf("Disable %s failed (error %d)\n",
+				       clk->dev->parent->name, ret);
 				return ret;
 			}
 		}
