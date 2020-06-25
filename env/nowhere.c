@@ -27,8 +27,17 @@ static int env_nowhere_init(void)
 	return 0;
 }
 
+static int env_nowhere_load(void)
+{
+	env_set_default(NULL, 0);
+	gd->env_valid	= ENV_INVALID;
+
+	return 0;
+}
+
 U_BOOT_ENV_LOCATION(nowhere) = {
 	.location	= ENVL_NOWHERE,
 	.init		= env_nowhere_init,
+	.load		= env_nowhere_load,
 	ENV_NAME("nowhere")
 };
